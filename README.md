@@ -115,6 +115,13 @@ with items carrying `id`, `name`, `author`, `description`, `contentLanguage`, `g
 `q=react` and `q=tailwind` both returned unrelated skills. It is usable as a source, not as a
 browsable shelf, which is why the curated registry exists.
 
+A source that hits its limit is reported with its **cooldown**, not only its status code.
+SkillsMP answers an exhausted daily quota with `429` and `Retry-After: 78860`; the page turns
+that into a live countdown — *retry in 21 h 49 min* — because `429` on its own does not tell a
+reader whether to wait a second or a day. When the window runs out, the row asks for one
+refresh. A host that names no window gets no clock: a countdown nothing backs is worse than
+the bare code.
+
 ## What the composition changed
 
 The page is registered **twice**, and the two seats do not agree on who provides the scroll
@@ -131,6 +138,10 @@ Settings dialog does scroll — `.VOzbGW_options { flex:1; min-height:0; overflo
 page therefore carries `height:100%; overflow-y:auto` and its own padding, mirroring what
 `dsh-client-ui-plugin-manager` does for the Plugins page. `height:100%` resolves against
 whichever box it lands in, which keeps it to exactly one scrollbar in both seats.
+
+The page also keeps one error slot **per tab**. The alert renders above the tab switch, so an
+unscoped failure — a catalog fetch that died, say — would paint over the installed inventory, a
+tab that had nothing to do with it and offers no way to act on it.
 
 Two lines here are load-bearing rather than cosmetic:
 
@@ -263,6 +274,7 @@ Live search and install do reach the network, subject to the provider's limits:
 
 | Symptom | Cause | What to do |
 | --- | --- | --- |
+| `429 Too Many Requests` | the source's quota is exhausted; SkillsMP's is 50 requests a day | wait out the countdown shown on the row, or set a key for that source |
 | `401 {"error":"authentication_required"}` | `skillssh` enabled without `skillsshToken` | set the token, or drop `skillssh` from `liveSources` |
 | `403` on `/install` or `/remove` | request from a non-loopback address with `allowRemote: false` | reach the UI on loopback, or set `allowRemote` deliberately |
 | `413` | request body over `MAX_BODY_BYTES` | send a smaller body |
@@ -320,6 +332,8 @@ scroll container and a working one produce the same screenshot.
 
 The host's `--dsw-alias-*` tokens are not defined outside the harness, so the preview stands in
 a dark approximation of them. Only the values differ; every rule under test is the shipped one.
+The locale binding is real, though: binding `t` to the identity function would print key names
+— `secCurated`, `unitHour` — into the screenshot, which a reader would take for the shipped UI.
 
 ```sh
 msedge --headless=new --disable-gpu --window-size=1500,1000 \

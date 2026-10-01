@@ -88,6 +88,11 @@ window.__ModuleLoader__.load({
         error: 'Error',
         notInstallable: 'This card has no fetchable source.',
         fileCount: 'Contents',
+        retryIn: 'retry in',
+        retryReady: 'cooldown over — refreshing',
+        unitHour: 'h',
+        unitMinute: 'min',
+        unitSecond: 's',
       },
       ru: {
         [LANG_KEY]: 'ru',
@@ -136,6 +141,11 @@ window.__ModuleLoader__.load({
         error: 'Ошибка',
         notInstallable: 'У этой карточки нет источника для скачивания.',
         fileCount: 'Содержимое',
+        retryIn: 'повтор через',
+        retryReady: 'кулдаун истёк — обновляю',
+        unitHour: 'ч',
+        unitMinute: 'мин',
+        unitSecond: 'с',
       },
     }
 
@@ -356,6 +366,13 @@ window.__ModuleLoader__.load({
 .dsh-skills-market .panel { border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .dsh-skills-market .alert { border-radius: 9px; padding: 10px 12px; border: 1px solid var(--dsw-alias-state-error-primary); color: var(--dsw-alias-state-error-primary); white-space: pre-wrap; word-break: break-word; }
 .dsh-skills-market .note { border-radius: 9px; padding: 8px 12px; border: 1px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-border-l1)); color: var(--dsw-alias-label-secondary); }
+/* A rate-limited row carries a live countdown, so the prose and the clock sit on
+   one line with the clock pushed to the edge. Tabular figures keep the seconds
+   from shifting the text sideways on every tick. */
+.dsh-skills-market .note.rate { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.dsh-skills-market .note.rate .why { min-width: 0; overflow-wrap: anywhere; }
+.dsh-skills-market .note.rate .cool { margin-left: auto; white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--dsw-alias-state-warning-primary); }
+.dsh-skills-market .note.rate .cool.done { color: var(--dsw-alias-state-success-primary); }
 
 .dsh-skills-market .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 60; }
 .dsh-skills-market .modal { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px; max-width: 880px; width: 100%; max-height: 84vh; display: flex; flex-direction: column; gap: 10px; padding: 16px; }
@@ -383,6 +400,59 @@ window.__ModuleLoader__.load({
           if (element.parentNode !== null) element.parentNode.removeChild(element)
         }
       }, [])
+    }
+
+    /** "21 h 54 min" — a daily quota is read in hours, not in 78860 seconds. */
+    function formatCooldown(seconds, t) {
+      const total = Math.max(0, Math.floor(seconds))
+      const hours = Math.floor(total / 3600)
+      const minutes = Math.floor((total % 3600) / 60)
+      const secs = total % 60
+      if (hours > 0) return `${hours} ${t('unitHour')} ${minutes} ${t('unitMinute')}`
+      if (minutes > 0) return `${minutes} ${t('unitMinute')} ${secs} ${t('unitSecond')}`
+      return `${secs} ${t('unitSecond')}`
+    }
+
+    /**
+     * A degraded source row, with the host's cooldown counted down.
+     *
+     * `429 Too Many Requests` alone leaves the reader unable to tell a
+     * one-second burst limit from an exhausted daily quota. SkillsMP's is the
+     * latter: it answers with `Retry-After: 78860`, so the honest thing to show
+     * is the clock, not the code.
+     *
+     * The deadline is captured once on mount rather than recomputed per render,
+     * so the countdown measures the host's window and not the time since the
+     * last repaint. When it reaches zero the row asks for one refresh; a source
+     * that is still limited simply answers with a fresh window.
+     */
+    function RateLimitNote(props) {
+      const { source, note, retryAfterSeconds, onExpired, t } = props
+      const [deadline] = React.useState(() => Date.now() + retryAfterSeconds * 1000)
+      const [now, setNow] = React.useState(() => Date.now())
+      const fired = React.useRef(false)
+      const remaining = Math.max(0, Math.ceil((deadline - now) / 1000))
+
+      React.useEffect(() => {
+        if (typeof window === 'undefined') return undefined
+        const timer = window.setInterval(() => setNow(Date.now()), 1000)
+        return () => window.clearInterval(timer)
+      }, [])
+
+      React.useEffect(() => {
+        if (remaining > 0 || fired.current) return
+        fired.current = true
+        onExpired()
+      }, [remaining, onExpired])
+
+      return h(
+        'div',
+        { className: 'note rate' },
+        h('span', { className: 'why' }, `${source}: ${note}`),
+        remaining > 0
+          ? h('span', { className: 'cool' }, `${t('retryIn')} ${formatCooldown(remaining, t)}`)
+          : h('span', { className: 'cool done' }, t('retryReady')),
+      )
     }
 
     /**
@@ -455,8 +525,19 @@ window.__ModuleLoader__.load({
       const [target, setTarget] = React.useState(null)
       const [viewer, setViewer] = React.useState(null)
       const [busy, setBusy] = React.useState('')
-      const [error, setError] = React.useState('')
+      const [error, setError] = React.useState(null)
       const [toasts, setToasts] = React.useState([])
+
+      /**
+       * Record a failure against the tab that raised it.
+       *
+       * The alert sits above the tab switch, so without a scope a failed
+       * catalog fetch paints an error over the installed inventory — a tab that
+       * had nothing to do with it and offers no way to act on it.
+       */
+      const fail = React.useCallback((failure, scope) => {
+        setError({ message: failure.message, scope })
+      }, [])
 
       /** Show a toast; the install reminder stays long enough to be read. */
       const pushToast = React.useCallback((toast) => {
@@ -488,10 +569,19 @@ window.__ModuleLoader__.load({
         return data
       }, [])
 
+      /**
+       * A cooldown that has run out is worth exactly one automatic retry. The
+       * row that fired it keeps its own guard, so a source that answers with a
+       * fresh window produces a new countdown rather than a request loop.
+       */
+      const retryAfterCooldown = React.useCallback(() => {
+        loadCatalog(query, source).catch(() => {})
+      }, [loadCatalog, query, source])
+
       React.useEffect(() => {
         let cancelled = false
         loadState().catch((failure) => {
-          if (!cancelled) setError(failure.message)
+          if (!cancelled) fail(failure, 'installed')
         })
         return () => {
           cancelled = true
@@ -503,7 +593,7 @@ window.__ModuleLoader__.load({
         let cancelled = false
         const timer = window.setTimeout(() => {
           loadCatalog(query, source).catch((failure) => {
-            if (!cancelled) setError(failure.message)
+            if (!cancelled) fail(failure, 'catalog')
           })
         }, 320)
         return () => {
@@ -516,7 +606,7 @@ window.__ModuleLoader__.load({
         async (card) => {
           if (target === null) return
           setBusy(card.id)
-          setError('')
+          setError(null)
           try {
             const result = await postJson('/install', { source: card.install, targetRootId: target })
             pushToast({
@@ -526,7 +616,7 @@ window.__ModuleLoader__.load({
             })
             await Promise.all([loadState(), loadCatalog(query, source)])
           } catch (failure) {
-            setError(failure.message)
+            fail(failure, 'catalog')
             pushToast({ kind: 'error', title: t('error'), body: failure.message })
           } finally {
             setBusy('')
@@ -538,13 +628,13 @@ window.__ModuleLoader__.load({
       const remove = React.useCallback(
         async (skill) => {
           if (typeof window !== 'undefined' && !window.confirm(`${t('confirmRemove')}\n\n${skill.path}`)) return
-          setError('')
+          setError(null)
           try {
             await postJson('/remove', { rootId: skill.rootId, name: skill.name, flat: skill.flat })
             pushToast({ title: t('removeTitle'), body: `${skill.title} — ${t('removeBody')}` })
             await Promise.all([loadState(), loadCatalog(query, source)])
           } catch (failure) {
-            setError(failure.message)
+            fail(failure, 'installed')
             pushToast({ kind: 'error', title: t('error'), body: failure.message })
           }
         },
@@ -553,19 +643,19 @@ window.__ModuleLoader__.load({
 
       const view = React.useCallback(
         async (skill) => {
-          setError('')
+          setError(null)
           try {
             const data = await getJson(`/skill?root=${encodeURIComponent(skill.rootId)}&name=${encodeURIComponent(skill.name)}&flat=${skill.flat === true}`)
             setViewer({ title: skill.title, ...data })
           } catch (failure) {
-            setError(failure.message)
+            fail(failure, 'installed')
           }
         },
         [],
       )
 
       if (state === null) {
-        return h('div', { className: 'dsh-skills-market' }, h('p', { className: 'sub' }, error === '' ? t('loading') : error))
+        return h('div', { className: 'dsh-skills-market' }, h('p', { className: 'sub' }, error === null ? t('loading') : error.message))
       }
 
       const installableRoots = state.roots.filter((root) => root.installable === true)
@@ -600,7 +690,10 @@ window.__ModuleLoader__.load({
           h('button', { className: 'tab', 'data-active': String(tab === 'catalog'), onClick: () => setTab('catalog') }, t('tabCatalog')),
         ),
 
-        error !== '' ? h('div', { className: 'alert' }, error) : null,
+        // Scoped to the tab that raised it: the catalog's network failures are
+        // not the installed inventory's problem, and an alert there cannot be
+        // acted on.
+        error !== null && error.scope === tab ? h('div', { className: 'alert' }, error.message) : null,
 
         tab === 'installed'
           ? h(
@@ -707,7 +800,21 @@ window.__ModuleLoader__.load({
                 catalog?.curatedNote !== undefined ? h('div', { className: 'note' }, catalog.curatedNote) : null,
                 (catalog?.sources ?? [])
                   .filter((entry) => entry.degraded === true && entry.note !== undefined)
-                  .map((entry) => h('div', { className: 'note', key: entry.source }, `${entry.source}: ${entry.note}`)),
+                  .map((entry) =>
+                    typeof entry.retryAfterSeconds === 'number'
+                      ? h(RateLimitNote, {
+                          // Keyed by the window, so a source that answers with a
+                          // fresh cooldown remounts and counts the new one down
+                          // rather than holding an expired deadline.
+                          key: `${entry.source}-${entry.retryAfterSeconds}`,
+                          source: entry.source,
+                          note: entry.note,
+                          retryAfterSeconds: entry.retryAfterSeconds,
+                          onExpired: retryAfterCooldown,
+                          t,
+                        })
+                      : h('div', { className: 'note', key: entry.source }, `${entry.source}: ${entry.note}`),
+                  ),
               ),
 
               showCurated && curatedShown.length > 0

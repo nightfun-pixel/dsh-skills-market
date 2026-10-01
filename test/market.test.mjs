@@ -27,7 +27,9 @@ import { indexByName, readSkill, removeSkill, scanAll, scanRoot } from '../lib/i
 import {
   assertFetchableUrl,
   deriveSkillName,
+  fetchText,
   githubRawUrl,
+  readRetryAfter,
   resolveSource,
   safeRelativeFile,
   slugifySkillName,
@@ -637,5 +639,88 @@ describe('http api', () => {
     assert.equal((await call({ method: 'GET', url: '/install' })).status, 405)
     assert.equal((await call({ method: 'GET', url: '/remove' })).status, 405)
     assert.equal((await call({ method: 'POST', url: '/install', body: {} })).status, 400)
+  })
+})
+
+/**
+ * A `429` on its own does not say whether to wait a second or a day, and the
+ * page counts the window down rather than reprinting the code — so the number
+ * has to survive the trip from the response headers to the rendered row.
+ */
+describe('rate-limit cooldowns', () => {
+  /** A `Headers`-like stand-in, matching what a fetch response exposes. */
+  const headers = (entries) => new Map(Object.entries(entries))
+
+  /** A response that fails with the given status and headers. */
+  const failing = (status, statusText, entries) => async () => ({
+    ok: false,
+    status,
+    statusText,
+    url: 'https://skillsmp.com/api/v1/skills/search',
+    headers: headers(entries),
+    text: async () => '{}',
+  })
+
+  it('reads Retry-After as delta-seconds', () => {
+    assert.equal(readRetryAfter(headers({ 'retry-after': '78860' })), 78860)
+    assert.equal(readRetryAfter(headers({ 'retry-after': '0' })), 0)
+  })
+
+  it('reads Retry-After as an HTTP date', () => {
+    const now = Date.parse('2026-10-01T00:00:00Z')
+    assert.equal(readRetryAfter(headers({ 'retry-after': 'Thu, 01 Oct 2026 00:10:00 GMT' }), now), 600)
+  })
+
+  it('falls back to x-ratelimit-reset in unix seconds', () => {
+    const now = Date.parse('2026-10-01T00:00:00Z')
+    // 1790899200 is the reset SkillsMP sent alongside Retry-After: 78860 —
+    // midnight UTC, the daily quota boundary.
+    assert.equal(readRetryAfter(headers({ 'x-ratelimit-reset': '1790899200' }), now), 86400)
+  })
+
+  it('states no window rather than inventing one', () => {
+    assert.equal(readRetryAfter(headers({})), undefined)
+    assert.equal(readRetryAfter(undefined), undefined)
+    assert.equal(readRetryAfter(headers({ 'retry-after': 'soon' })), undefined)
+    assert.equal(readRetryAfter(headers({ 'x-ratelimit-reset': 'not-a-number' })), undefined)
+  })
+
+  it('carries the cooldown on the thrown error, not only the status code', async () => {
+    await assert.rejects(
+      () => fetchText('https://skillsmp.com/api/v1/skills/search', { fetchImpl: failing(429, 'Too Many Requests', { 'retry-after': '78860' }) }),
+      (error) => {
+        assert.equal(error.status, 429)
+        assert.equal(error.retryAfterSeconds, 78860)
+        assert.match(error.message, /429 Too Many Requests/)
+        return true
+      },
+    )
+  })
+
+  it('leaves retryAfterSeconds unset when the host names no window', async () => {
+    await assert.rejects(
+      () => fetchText('https://skillsmp.com/api/v1/skills/search', { fetchImpl: failing(500, 'Server Error', {}) }),
+      (error) => {
+        assert.equal(error.status, 500)
+        assert.equal(error.retryAfterSeconds, undefined)
+        return true
+      },
+    )
+  })
+
+  it('passes the cooldown through a degraded source row', async () => {
+    const row = await searchSource('skillsmp', { query: 'react', config: {}, fetchImpl: failing(429, 'Too Many Requests', { 'retry-after': '120' }) })
+    assert.equal(row.degraded, true)
+    assert.equal(row.error, true)
+    assert.equal(row.status, 429)
+    assert.equal(row.retryAfterSeconds, 120)
+    assert.match(row.note, /429 Too Many Requests/)
+  })
+
+  it('reports a degraded source with no window as having none', async () => {
+    const row = await searchSource('skillsmp', { query: 'react', config: {}, fetchImpl: failing(503, 'Service Unavailable', {}) })
+    assert.equal(row.degraded, true)
+    assert.equal(row.status, 503)
+    assert.equal(row.retryAfterSeconds, undefined)
   })
 })

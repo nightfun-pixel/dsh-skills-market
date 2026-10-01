@@ -46,9 +46,12 @@ function loadClient(react) {
       },
     },
     // The component closes over this object, so anything it reaches for on
-    // `window` has to exist here.
+    // `window` has to exist here. The countdown row starts an interval; the
+    // handle is returned without a real timer so the suite does not hang.
     setTimeout: () => 0,
     clearTimeout: () => {},
+    setInterval: () => 0,
+    clearInterval: () => {},
   }
   // eslint-disable-next-line no-new-func -- the file is a browser script, not a module
   new Function('window', source)(window)
@@ -75,13 +78,22 @@ function makeReact(queue = [], options = {}) {
       return { type, props: { ...(props ?? {}), children: rest } }
     },
     useState(initial) {
-      return [queue.length > 0 ? queue.shift() : initial, () => {}]
+      // React resolves a lazy initializer; the countdown row seeds its deadline
+      // that way, so the shim has to as well.
+      const value = queue.length > 0 ? queue.shift() : initial
+      return [typeof value === 'function' ? value() : value, () => {}]
     },
     useEffect(effect) {
       if (options.runEffects === true) effect()
     },
     useCallback(fn) {
       return fn
+    },
+    useMemo(fn) {
+      return fn()
+    },
+    useRef(initial) {
+      return { current: initial }
     },
   }
 }
@@ -325,5 +337,73 @@ describe('client half', () => {
     assert.equal(icon.type, 'svg')
     assert.equal(icon.props.width, 22)
     assert.equal(icon.props.height, 22)
+  })
+
+  /**
+   * Render the page with a preset hook queue and the real English dictionary,
+   * so an assertion about wording is an assertion about what ships.
+   */
+  function renderPage(queue) {
+    const { exported } = loadClient(makeReact(queue))
+    const { ctx, registrations } = makeContext()
+    exported.apply(ctx)
+    const Component = registrations.find((entry) => entry.name === 'settings.section').component
+    return collectText(Component({ t: ctx.locale.bind('skills-market') })).join(' | ')
+  }
+
+  /** The hook queue `MarketPage` consumes, in order. */
+  const pageQueue = (tab, catalog, error) => [
+    tab,
+    { total: 0, roots: [], skills: [], sources: [], defaultTarget: 'user-dsh' },
+    catalog,
+    '',
+    'all',
+    'all',
+    'user-dsh',
+    null,
+    '',
+    error,
+    [],
+  ]
+
+  it('shows an error only in the tab that raised it', () => {
+    // The alert sits above the tab switch, so a failure carrying no scope
+    // paints over whichever tab the reader happens to be on — including the
+    // installed inventory, which had nothing to do with it and offers no way
+    // to act on it.
+    const failure = { message: 'catalog exploded', scope: 'catalog' }
+    const catalog = { curated: [], live: [], sources: [] }
+
+    assert.doesNotMatch(renderPage(pageQueue('installed', catalog, failure)), /catalog exploded/)
+    assert.match(renderPage(pageQueue('catalog', catalog, failure)), /catalog exploded/)
+  })
+
+  it('counts a rate-limited source down instead of reprinting the status code', () => {
+    // 78860 is the Retry-After SkillsMP actually answers with once its daily
+    // quota is gone. "21 h 54 min" is a decision a reader can make; "429" is not.
+    const catalog = {
+      curated: [],
+      live: [],
+      sources: [
+        { source: 'skillsmp', count: 0, degraded: true, error: true, status: 429, note: '429 Too Many Requests', retryAfterSeconds: 78860 },
+      ],
+    }
+
+    const text = renderPage(pageQueue('catalog', catalog, null))
+    assert.match(text, /429 Too Many Requests/)
+    assert.match(text, /retry in 21 h 54 min/)
+  })
+
+  it('reports a degraded source with no stated window as a plain note', () => {
+    const catalog = {
+      curated: [],
+      live: [],
+      sources: [{ source: 'skillsmp', count: 0, degraded: true, error: true, status: 503, note: '503 Service Unavailable' }],
+    }
+
+    const text = renderPage(pageQueue('catalog', catalog, null))
+    assert.match(text, /503 Service Unavailable/)
+    // No window was named, so no clock is invented for it.
+    assert.doesNotMatch(text, /retry in/)
   })
 })

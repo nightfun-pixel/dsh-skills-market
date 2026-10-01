@@ -70,11 +70,18 @@ function makeReact(queue) {
       const rest = children.length === 0 ? undefined : children.length === 1 ? children[0] : children
       return { type, props: { ...(props ?? {}), children: rest } }
     },
-    useState: (initial) => [queue.length > 0 ? queue.shift() : initial, () => {}],
+    // `useState` takes a lazy initializer in React; resolving it here keeps the
+    // shim faithful, since the countdown row seeds its deadline that way.
+    useState: (initial) => {
+      const value = queue.length > 0 ? queue.shift() : initial
+      return [typeof value === 'function' ? value() : value, () => {}]
+    },
     useEffect(effect) {
       effect()
     },
     useCallback: (fn) => fn,
+    useMemo: (fn) => fn(),
+    useRef: (initial) => ({ current: initial }),
   }
 }
 
@@ -117,6 +124,10 @@ const fakeWindow = {
   __ModuleLoader__: { load: (value) => { spec = value } },
   setTimeout: () => 0,
   clearTimeout: () => {},
+  // The countdown row starts an interval. Returning a handle without starting a
+  // real timer keeps the preview from hanging on a live process.
+  setInterval: () => 0,
+  clearInterval: () => {},
   open: () => {},
 }
 new Function('window', source)(fakeWindow)
@@ -148,11 +159,20 @@ const exported = spec.factory((name) => {
 })
 
 const registrations = []
+// The page resolves every label through `t`. Binding it to the identity
+// function would print the key names — `secCurated`, `unitHour` — into the
+// screenshot, which is exactly what a reader would take for the real UI.
+let strings = null
+const t = (key) => strings?.en?.[key] ?? key
+
 exported.apply({
   effect: (factory) => factory(),
   locale: {
-    register: () => () => {},
-    bind: () => (key) => key,
+    register: (_namespace, value) => {
+      strings = value
+      return () => {}
+    },
+    bind: () => t,
   },
   slots: {
     inject: (_name, callback) => {
@@ -167,7 +187,7 @@ exported.apply({
 })
 
 const section = registrations.find((entry) => entry.name === 'settings.section')
-const html = render(section.component({ t: (key) => key }))
+const html = render(section.component({ t }))
 
 const TOKENS = `
 :root {
