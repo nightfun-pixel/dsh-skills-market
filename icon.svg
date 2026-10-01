@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="24" height="24" role="img" aria-label="Skills Market">
+  <path d="M3 9.5 4.6 4.8A1 1 0 0 1 5.6 4h12.8a1 1 0 0 1 1 .8L21 9.5" />
+  <path d="M3 9.5a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0" />
+  <path d="M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7" />
+  <path d="M9.5 20v-4.5h5V20" />
+</svg>

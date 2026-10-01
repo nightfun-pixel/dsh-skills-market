@@ -1,0 +1,51 @@
+{
+  "name": "@local/dsh-skills-market",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A shop for SKILL.md: browse what is installed across every skill root, install new ones from the curated registry and live catalogs, and delete what you no longer want.",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "icon.svg",
+    "cordis.patch.yml",
+    "lib",
+    "locale",
+    "data",
+    "scripts",
+    "test",
+    "README.md"
+  ],
+  "icon": "./icon.svg",
+  "scripts": {
+    "build:curated": "node scripts/build-curated.mjs",
+    "test": "node --test --test-timeout=30000 test/market.test.mjs test/client.test.mjs"
+  },
+  "meta": {
+    "title": "Skills Market",
+    "description": "Browse the SKILL.md files this machine already has and install new ones from the curated registry, SkillsMP, skills.sh and GitHub."
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-theme",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

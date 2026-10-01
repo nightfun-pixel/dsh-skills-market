@@ -1,0 +1,26 @@
+# Skills Market bundle patch.
+#
+# One row. The plugin owns everything else: the root scan, the curated registry,
+# the live source adapters, the installer, and the page. Installing a skill from
+# that page is not a loader row — it is a file written into a skills directory
+# this plugin resolved at request time, which is what lets a skill be installed
+# and deleted without touching the composition or restarting anything.
+
+- insert:
+    - id: skills-market
+      name: '@local/dsh-skills-market'
+      config:
+        # Where a new skill lands unless the page says otherwise. `user-dsh` is
+        # DSH_HOME/skills — the root this agent reads in every project. Switch to
+        # `user-agents` to install into the cross-platform ~/.agents/skills that
+        # Claude Code, Cursor and Codex share.
+        defaultTarget: user-dsh
+
+        # Live shelves to search. Only SkillsMP answers without credentials;
+        # skills.sh needs a Vercel OIDC token and GitHub needs a PAT, so both are
+        # opt-in rather than a permanent error row in the shop.
+        liveSources: skillsmp
+
+        # Leave empty to use the bundled curated registry. Point this at a JSON
+        # array of cards on GitHub to add your own shelf on top of it.
+        curatedUrl: ''
